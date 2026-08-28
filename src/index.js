@@ -27,7 +27,9 @@ commitsUrl.searchParams.set('per_page', '20');
 const stateFile = path.resolve(process.env.STATE_FILE || '.commit-monitor-state.json');
 const stateDirectory = path.dirname(stateFile);
 
-const discord = new Client({ intents: [GatewayIntentBits.Guilds] });
+const discord = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+});
 let etag;
 let lastKnownSha;
 let pollingTimer;
@@ -52,6 +54,12 @@ function nextFailureDelay() {
 
 function shortSha(sha = '') {
   return sha.slice(0, 7);
+}
+
+function mentionResponse(template, user) {
+  return template
+    .replaceAll('{user}', `<@${user.id}>`)
+    .replaceAll('{name}', user.username);
 }
 
 async function prepareStateDirectory() {
@@ -213,6 +221,25 @@ discord.on('error', (error) => console.error('Erro no cliente Discord:', error))
 discord.on('shardError', (error, shardId) => console.error(`Erro no shard ${shardId}:`, error));
 discord.on('shardDisconnect', (event, shardId) => {
   console.warn(`Shard ${shardId} desconectado (codigo ${event.code}).`);
+});
+
+discord.on('messageCreate', async (message) => {
+  if (message.author.bot || !discord.user || !message.mentions.has(discord.user)) return;
+
+  const mention = new RegExp(`<@!?${discord.user.id}>`, 'g');
+  const textAfterMention = message.content.replace(mention, '').trim();
+  const template = textAfterMention
+    ? ('{user} oq foi caralho? tem demência filha da puta? para de me marcar seu randola de merda')
+    : ('Eu não to entendendo porra nenhuma, mas tô aqui igual um filha da puta olhando a porra dos commit');
+
+  try {
+    await message.reply({
+      content: mentionResponse(template, message.author),
+      allowedMentions: { repliedUser: false },
+    });
+  } catch (error) {
+    console.error('Deu merda ao responder:', error);
+  }
 });
 
 async function shutdown(signal, exitCode = 0) {
