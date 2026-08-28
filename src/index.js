@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { ActivityType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 
 const requiredEnv = ['DISCORD_TOKEN', 'DISCORD_CHANNEL_ID', 'GITHUB_REPOSITORY'];
@@ -22,6 +24,7 @@ const branch = process.env.GITHUB_BRANCH || 'main';
 const commitsUrl = new URL(`https://api.github.com/repos/${owner}/${repository}/commits`);
 commitsUrl.searchParams.set('sha', branch);
 commitsUrl.searchParams.set('per_page', '20');
+const stateFile = path.resolve(process.env.STATE_FILE || '.commit-monitor-state.json');
 
 const discord = new Client({ intents: [GatewayIntentBits.Guilds] });
 let etag;
@@ -29,6 +32,30 @@ let lastKnownSha;
 
 function shortSha(sha = '') {
   return sha.slice(0, 7);
+}
+
+async function restoreState() {
+  try {
+    const state = JSON.parse(await readFile(stateFile, 'utf8'));
+    if (state.repository === repositoryReference && state.branch === branch && state.lastKnownSha) {
+      lastKnownSha = state.lastKnownSha;
+      console.log(`Estado restaurado: ultimo commit ${shortSha(lastKnownSha)}.`);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.warn('Nao foi possivel restaurar o estado do monitor:', error);
+  }
+}
+
+async function persistState() {
+  const temporaryFile = `${stateFile}.tmp`;
+  const state = JSON.stringify({ repository: repositoryReference, branch, lastKnownSha });
+  try {
+    await mkdir(path.dirname(stateFile), { recursive: true });
+    await writeFile(temporaryFile, state, 'utf8');
+    await rename(temporaryFile, stateFile);
+  } catch (error) {
+    console.error('Nao foi possivel salvar o estado do monitor:', error);
+  }
 }
 
 function commitEmbed(commit) {
@@ -88,20 +115,42 @@ async function checkForCommits(channel) {
   const newestSha = commits[0].sha;
   if (!lastKnownSha) {
     lastKnownSha = newestSha;
+    await persistState();
     console.log(`To de vigia no ${owner}/${repository} (${branch}) a partir da desgraça ${shortSha(newestSha)}.`);
     return pollIntervalMs;
   }
   if (newestSha === lastKnownSha) return pollIntervalMs;
 
   const previousIndex = commits.findIndex((commit) => commit.sha === lastKnownSha);
-  const unseen = previousIndex === -1 ? [commits[0]] : commits.slice(0, previousIndex);
-  const toSend = unseen.slice(0, maxCommitsPerCheck).reverse();
-
-  if (unseen.length > toSend.length) {
-    console.warn(`${unseen.length} commits novos detectados; enviando os ${toSend.length} mais recentes.`);
+  if (previousIndex === -1) {
+    console.warn(
+      `O ultimo SHA ${shortSha(lastKnownSha)} nao esta entre os 20 commits retornados. `
+      + 'O historico pode ter sido reescrito ou ser maior que a janela de consulta.',
+    );
   }
-  for (const commit of toSend) await channel.send({ embeds: [commitEmbed(commit)] });
-  lastKnownSha = newestSha;
+
+  const unseen = previousIndex === -1 ? [commits[0]] : commits.slice(0, previousIndex);
+  const hasMoreCommits = unseen.length > maxCommitsPerCheck;
+  // A API retorna do mais novo ao mais antigo. Enviamos primeiro os mais antigos.
+  const toSend = (hasMoreCommits ? unseen.slice(-maxCommitsPerCheck) : unseen).reverse();
+
+  if (hasMoreCommits) {
+    console.warn(`${unseen.length} commits novos detectados; enviando os ${toSend.length} mais antigos neste ciclo.`);
+  }
+  for (const commit of toSend) {
+    try {
+      await channel.send({ embeds: [commitEmbed(commit)] });
+    } catch (error) {
+      // Sem isso, o ETag atual resultaria em 304 e impediria a nova tentativa.
+      etag = undefined;
+      console.error(`Falha ao enviar o card do commit ${shortSha(commit.sha)}:`, error);
+      throw error;
+    }
+    lastKnownSha = commit.sha;
+    await persistState();
+  }
+  // Ainda existem commits pendentes; um 304 nao pode ocultar essa fila.
+  if (hasMoreCommits) etag = undefined;
   return pollIntervalMs;
 }
 
@@ -117,6 +166,12 @@ function schedulePolling(channel, delay = 0) {
   }, delay);
 }
 
+discord.on('error', (error) => console.error('Erro no cliente Discord:', error));
+discord.on('shardError', (error, shardId) => console.error(`Erro no shard ${shardId}:`, error));
+discord.on('shardDisconnect', (event, shardId) => {
+  console.warn(`Shard ${shardId} desconectado (codigo ${event.code}).`);
+});
+
 discord.once('clientReady', async () => {
   console.log(`Bot conectado como ${discord.user.tag}`);
   discord.user.setPresence({
@@ -130,6 +185,7 @@ discord.once('clientReady', async () => {
   })
   const channel = await discord.channels.fetch(process.env.DISCORD_CHANNEL_ID);
   if (!channel?.isTextBased()) throw new Error('DISCORD_CHANNEL_ID ta apontando pra um lugar errado seu fdp.');
+  await restoreState();
   console.log(`A desgraça da consulta foi configurada para ${pollIntervalMs / 1000} segundos.`);
   schedulePolling(channel);
 });
