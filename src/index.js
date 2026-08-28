@@ -29,6 +29,23 @@ const stateFile = path.resolve(process.env.STATE_FILE || '.commit-monitor-state.
 const discord = new Client({ intents: [GatewayIntentBits.Guilds] });
 let etag;
 let lastKnownSha;
+let pollingTimer;
+let shuttingDown = false;
+let consecutiveFailures = 0;
+
+function resetFailureBackoff() {
+  if (consecutiveFailures > 0) console.log('A misera da conexão foi reestabelecida nesse caralho.');
+  consecutiveFailures = 0;
+}
+
+function nextFailureDelay() {
+  consecutiveFailures += 1;
+  const delay = Math.min(pollIntervalMs * (2 ** (consecutiveFailures - 1)), 30 * 60 * 1000);
+  if (consecutiveFailures === 3) {
+    console.warn('Essa porra falhou 3 vezes ao consultar a desgraça do Github. backoff progressivo ativado nesse caralho.');
+  }
+  return delay;
+}
 
 function shortSha(sha = '') {
   return sha.slice(0, 7);
@@ -101,13 +118,25 @@ async function checkForCommits(channel) {
   if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   if (etag) headers['If-None-Match'] = etag;
 
-  const response = await fetch(commitsUrl, { headers, signal: AbortSignal.timeout(15_000) });
-  if (response.status === 304) return pollIntervalMs;
+  let response;
+  try {
+    response = await fetch(commitsUrl, { headers, signal: AbortSignal.timeout(15_000) });
+  } catch (error) {
+    const wasTimeout = error.name === 'TimeoutError' || error.name === 'AbortError'
+      || error.cause?.name === 'TimeoutError';
+    console.error(wasTimeout ? 'Tempo limite de 15 seg nesse caralho pra consulta.' : 'DEU FALHA AO CONSULTAR A REDE CARALHO:', error);
+    return nextFailureDelay();
+  }
+  if (response.status === 304) {
+    resetFailureBackoff();
+    return pollIntervalMs;
+  }
   if (!response.ok) {
     console.error(`GitHub respondeu ${response.status}: ${await response.text()}`);
-    return waitForRateLimit(response);
+    return Math.max(waitForRateLimit(response), nextFailureDelay());
   }
 
+  resetFailureBackoff();
   etag = response.headers.get('etag') || etag;
   const commits = await response.json();
   if (!Array.isArray(commits) || commits.length === 0) return pollIntervalMs;
@@ -116,7 +145,7 @@ async function checkForCommits(channel) {
   if (!lastKnownSha) {
     lastKnownSha = newestSha;
     await persistState();
-    console.log(`To de vigia no ${owner}/${repository} (${branch}) a partir da desgraça ${shortSha(newestSha)}.`);
+    console.log(`Monitorando ${owner}/${repository} (${branch}) a partir de ${shortSha(newestSha)}.`);
     return pollIntervalMs;
   }
   if (newestSha === lastKnownSha) return pollIntervalMs;
@@ -155,12 +184,14 @@ async function checkForCommits(channel) {
 }
 
 function schedulePolling(channel, delay = 0) {
-  setTimeout(async () => {
+  if (shuttingDown) return;
+  pollingTimer = setTimeout(async () => {
     let nextDelay = pollIntervalMs;
     try {
       nextDelay = await checkForCommits(channel);
     } catch (error) {
-      console.error('Deu B.O na consulta dos commits seu fdp:', error);
+      console.error('Falha na hora de processar os commit nessa misera:', error);
+      nextDelay = nextFailureDelay();
     }
     schedulePolling(channel, nextDelay);
   }, delay);
@@ -172,19 +203,30 @@ discord.on('shardDisconnect', (event, shardId) => {
   console.warn(`Shard ${shardId} desconectado (codigo ${event.code}).`);
 });
 
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  if (pollingTimer) clearTimeout(pollingTimer);
+  console.log(`Recebido ${signal}; vou dar um /kill na porra do bot (no caso eu mesmo).`);
+  try {
+    discord.destroy();
+  } catch (error) {
+    console.error('DEU ERRO NA HORA DE MATAR O BOT CARALHOOOO:', error);
+  }
+  process.exit(0);
+}
+
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+
 discord.once('clientReady', async () => {
   console.log(`Bot conectado como ${discord.user.tag}`);
   discord.user.setPresence({
-    status: "dnd",
-    activities: [
-      {
-        name: "To vendo as porra dos commits nessa misera",
-        type: ActivityType.Custom
-      }
-    ]
-  })
+    status: 'online',
+    activities: [{ name: 'To vendo as porra dos commits nessa misera', type: ActivityType.Watching }],
+  });
   const channel = await discord.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-  if (!channel?.isTextBased()) throw new Error('DISCORD_CHANNEL_ID ta apontando pra um lugar errado seu fdp.');
+  if (!channel?.isTextBased()) throw new Error('DISCORD_CHANNEL_ID nao aponta para um canal de texto acessivel.');
   await restoreState();
   console.log(`A desgraça da consulta foi configurada para ${pollIntervalMs / 1000} segundos.`);
   schedulePolling(channel);
