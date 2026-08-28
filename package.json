@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "discord.js": "^14.25.1",
-    "dotenv": "^16.6.1",
-    "fastify": "^5.5.0"
+    "dotenv": "^16.6.1"
   }
 }
