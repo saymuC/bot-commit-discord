@@ -222,7 +222,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 discord.once('clientReady', async () => {
   console.log(`Bot conectado como ${discord.user.tag}`);
   discord.user.setPresence({
-    status: 'online',
+    status: 'dnd',
     activities: [{ name: 'To vendo as porra dos commits nessa misera', type: ActivityType.Watching }],
   });
   const channel = await discord.channels.fetch(process.env.DISCORD_CHANNEL_ID);
