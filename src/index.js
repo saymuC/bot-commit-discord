@@ -3,6 +3,9 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ActivityType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 
+const mentionWithText = "{user} eu não to entendendo porra nenhuma, mas tô aqui igual um filha da puta olhando a porra dos commit";
+const mentionText = "{user} oq foi caralho? tem demência filha da puta? para de me marcar seu randola de merda"
+
 const requiredEnv = ['DISCORD_TOKEN', 'DISCORD_CHANNEL_ID', 'GITHUB_REPOSITORY'];
 const missing = requiredEnv.filter((key) => !process.env[key]);
 if (missing.length) throw new Error(`Variaveis ausentes no .env: ${missing.join(', ')}`);
@@ -229,8 +232,8 @@ discord.on('messageCreate', async (message) => {
   const mention = new RegExp(`<@!?${discord.user.id}>`, 'g');
   const textAfterMention = message.content.replace(mention, '').trim();
   const template = textAfterMention
-    ? ('{user} eu não to entendendo porra nenhuma, mas tô aqui igual um filha da puta olhando a porra dos commit')
-    : ('{user} oq foi caralho? tem demência filha da puta? para de me marcar seu randola de merda');
+    ? (mentionWithText)
+    : (mentionText);
 
   try {
     await message.reply({
