@@ -63,6 +63,6 @@ O projeto ja inclui:
 
 Para enviar manualmente por ZIP, compacte a raiz do projeto contendo `package.json`, `package-lock.json`, `src`, `discloud.config` e o `.env`. O `.env` deve ser incluido nesse ZIP para o bot receber os segredos, mas nunca deve ir para o GitHub.
 
-Se usar a integracao GitHub da Discloud, mantenha `.env` fora do repositorio e preencha as mesmas variaveis na secao **Environment Variables** do painel da Discloud.
-
-Depois do deploy, o bot continuara verificando o repositorio sem precisar de ngrok ou de configurar Webhooks no GitHub.
+Caso queira deixar automático, basta conectar o respositório ao Dicloud e usar o `.discloudignore` para evitar enviar arquivos
+sensíveis, como por exemplo o `.env`, neste caso configure as variavéis de ambiente no prórpio painel da Discloud, a cada
+novo commit no repositório, automaticamente a Discloud vai atualizar seu bot.
