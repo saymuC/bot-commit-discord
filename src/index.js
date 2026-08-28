@@ -229,8 +229,8 @@ discord.on('messageCreate', async (message) => {
   const mention = new RegExp(`<@!?${discord.user.id}>`, 'g');
   const textAfterMention = message.content.replace(mention, '').trim();
   const template = textAfterMention
-    ? ('{user} oq foi caralho? tem demência filha da puta? para de me marcar seu randola de merda')
-    : ('Eu não to entendendo porra nenhuma, mas tô aqui igual um filha da puta olhando a porra dos commit');
+    ? ('{user} eu não to entendendo porra nenhuma, mas tô aqui igual um filha da puta olhando a porra dos commit')
+    : ('{user} oq foi caralho? tem demência filha da puta? para de me marcar seu randola de merda');
 
   try {
     await message.reply({
