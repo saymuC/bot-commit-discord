@@ -23,6 +23,9 @@ app.removeContentTypeParser('application/json');
 app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
   done(null, body);
 });
+app.addContentTypeParser('*', { parseAs: 'buffer' }, (request, body, done) => {
+  done(null, body);
+});
 
 function verifyGitHubSignature(rawBody, signature) {
   if (!signature?.startsWith('sha256=')) return false;
@@ -40,6 +43,16 @@ function verifyGitHubSignature(rawBody, signature) {
 
 function shortSha(sha = '') {
   return sha.slice(0, 7);
+}
+
+function parseGitHubPayload(rawBody, contentType) {
+  const text = rawBody.toString('utf8');
+  if (contentType?.includes('application/x-www-form-urlencoded')) {
+    const payload = new URLSearchParams(text).get('payload');
+    if (!payload) throw new Error('Payload de formulario ausente.');
+    return JSON.parse(payload);
+  }
+  return JSON.parse(text);
 }
 
 function commitEmbed(payload, commit) {
@@ -77,7 +90,12 @@ app.post('/github/webhook', async (request, reply) => {
     return reply.code(204).send();
   }
 
-  const payload = JSON.parse(rawBody.toString('utf8'));
+  let payload;
+  try {
+    payload = parseGitHubPayload(rawBody, String(request.headers['content-type'] || ''));
+  } catch {
+    return reply.code(400).send({ error: 'Payload do GitHub invalido.' });
+  }
   if (payload.deleted || !payload.commits?.length) {
     return reply.code(204).send();
   }
