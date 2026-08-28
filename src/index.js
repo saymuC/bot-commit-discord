@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import 'dotenv/config';
 import Fastify from 'fastify';
-import { Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
+import { ActivityType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 
 const requiredEnv = [
   'DISCORD_TOKEN',
@@ -115,6 +115,15 @@ app.post('/github/webhook', async (request, reply) => {
 
 discord.once('clientReady', async () => {
   console.log(`Bot conectado como ${discord.user.tag}`);
+  discord.user.setPresence({
+    status: "dnd",
+    activities: [
+      {
+        name: "To vendo os commit nessa porra",
+        type: ActivityType.Streaming
+      }
+    ]
+  })
   await app.listen({ port: Number(process.env.PORT) || 3000, host: '0.0.0.0' });
   console.log(`Webhook aguardando em /github/webhook na porta ${process.env.PORT || 3000}`);
 });
