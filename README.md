@@ -2,8 +2,7 @@
 
 Bot Discord que monitora uma branch de um repositorio GitHub e publica cards com os novos commits em um canal configurado.
 
-Ele usa consulta periodica da API do GitHub. Portanto, nao precisa de webhook, dominio, ngrok ou servidor HTTP publico — uma boa opcao para hospedar como bot na Discloud.
-
+Ele usa consulta periodica da API do GitHub. Portanto, nao precisa de webhook, dominio, ngrok ou servidor HTTP publico
 ## Requisitos
 
 - Node.js 20 ou superior para desenvolvimento local.
