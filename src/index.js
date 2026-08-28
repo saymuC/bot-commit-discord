@@ -121,7 +121,7 @@ discord.once('clientReady', async () => {
   console.log(`Bot conectado como ${discord.user.tag}`);
   discord.user.setPresence({
     status: "dnd",
-    activities [
+    activities: [
       {
         name: "To vendo as porra dos commits nessa misera",
         type: ActivityType.Custom
