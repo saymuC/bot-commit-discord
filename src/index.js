@@ -95,7 +95,7 @@ app.post('/github/webhook', async (request, reply) => {
   return reply.code(204).send();
 });
 
-discord.once('ready', async () => {
+discord.once('clientReady', async () => {
   console.log(`Bot conectado como ${discord.user.tag}`);
   await app.listen({ port: Number(process.env.PORT) || 3000, host: '0.0.0.0' });
   console.log(`Webhook aguardando em /github/webhook na porta ${process.env.PORT || 3000}`);
