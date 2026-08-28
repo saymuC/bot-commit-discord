@@ -25,6 +25,7 @@ const commitsUrl = new URL(`https://api.github.com/repos/${owner}/${repository}/
 commitsUrl.searchParams.set('sha', branch);
 commitsUrl.searchParams.set('per_page', '20');
 const stateFile = path.resolve(process.env.STATE_FILE || '.commit-monitor-state.json');
+const stateDirectory = path.dirname(stateFile);
 
 const discord = new Client({ intents: [GatewayIntentBits.Guilds] });
 let etag;
@@ -32,6 +33,7 @@ let lastKnownSha;
 let pollingTimer;
 let shuttingDown = false;
 let consecutiveFailures = 0;
+let stateDirectoryReady;
 
 function resetFailureBackoff() {
   if (consecutiveFailures > 0) console.log('Conexao com GitHub restabelecida.');
@@ -51,6 +53,11 @@ function shortSha(sha = '') {
   return sha.slice(0, 7);
 }
 
+async function prepareStateDirectory() {
+  if (!stateDirectoryReady) stateDirectoryReady = mkdir(stateDirectory, { recursive: true });
+  await stateDirectoryReady;
+}
+
 async function restoreState() {
   try {
     const state = JSON.parse(await readFile(stateFile, 'utf8'));
@@ -67,7 +74,6 @@ async function persistState() {
   const temporaryFile = `${stateFile}.tmp`;
   const state = JSON.stringify({ repository: repositoryReference, branch, lastKnownSha });
   try {
-    await mkdir(path.dirname(stateFile), { recursive: true });
     await writeFile(temporaryFile, state, 'utf8');
     await rename(temporaryFile, stateFile);
   } catch (error) {
@@ -218,6 +224,14 @@ async function shutdown(signal, exitCode = 0) {
 
 process.once('SIGINT', () => shutdown('SIGINT'));
 process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.on('unhandledRejection', (reason) => {
+  console.error('Promessa rejeitada sem tratamento:', reason);
+  shutdown('unhandledRejection', 1);
+});
+process.on('uncaughtException', (error) => {
+  console.error('Excecao nao tratada:', error);
+  shutdown('uncaughtException', 1);
+});
 
 discord.once('clientReady', async () => {
   try {
@@ -228,7 +242,15 @@ discord.once('clientReady', async () => {
     });
     const channel = await discord.channels.fetch(process.env.DISCORD_CHANNEL_ID);
     if (!channel?.isTextBased()) throw new Error('DISCORD_CHANNEL_ID nao aponta para um canal de texto acessivel.');
+    await prepareStateDirectory();
     await restoreState();
+    if (!process.env.GITHUB_TOKEN) {
+      const requestsPerHour = Math.ceil(3_600_000 / pollIntervalMs);
+      console.warn(
+        `GITHUB_TOKEN nao definido: a API permite cerca de 60 consultas por hora sem autenticacao. `
+        + `Com o intervalo atual, o bot pode fazer ate ${requestsPerHour} consultas por hora.`,
+      );
+    }
     console.log(`A desgraça da consulta foi configurada para ${pollIntervalMs / 1000} segundos.`);
     schedulePolling(channel);
   } catch (error) {

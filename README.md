@@ -49,6 +49,8 @@ No primeiro ciclo, o bot apenas salva o commit atual como referencia e nao envia
 - Com token GitHub, respostas condicionais `304` nao consomem o limite primario da API.
 - Nunca executa consultas em paralelo, aplica timeout de 15 segundos e espera automaticamente quando a API informa limite de taxa.
 - Falhas transitórias e respostas de erro usam backoff exponencial, de até 30 minutos, reduzindo consumo e ruído de logs em indisponibilidades prolongadas.
+- Sem `GITHUB_TOKEN`, a API pública do GitHub permite cerca de 60 consultas por hora por IP. O bot alerta ao iniciar; use token ou mantenha `POLL_INTERVAL_SECONDS` em valor compatível.
+- O diretório do arquivo de estado é preparado uma vez na inicialização. Handlers globais registram rejeições e exceções não tratadas antes de encerrar o processo.
 - Timeout de rede, erros do cliente Discord e desconexões de shard são registrados com contexto. Em `SIGINT` ou `SIGTERM`, o bot interrompe o agendamento e fecha a conexão Discord antes de sair.
 - O SHA do ultimo card confirmado e salvo em `.commit-monitor-state.json`; reinicios no mesmo ambiente retomam a partir dele. O arquivo e ignorado pelo Git e pela Discloud para nao transportar estado antigo em um novo deploy.
 - Por seguranca contra spam e rate limits, envia no maximo cinco cards por ciclo por padrao. Quando houver mais pendentes, envia primeiro os mais antigos e continua no proximo ciclo, sem descartar os demais.
