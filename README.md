@@ -26,7 +26,7 @@ Ele usa consulta periodica da API do GitHub. Portanto, nao precisa de webhook, d
    GITHUB_REPOSITORY=seu-usuario/seu-repositorio
    GITHUB_BRANCH=main
    GITHUB_TOKEN=github_pat_seu_token
-   POLL_INTERVAL_SECONDS=120
+   POLL_INTERVAL_SECONDS=60
    MAX_COMMITS_PER_CHECK=5
    ```
 
@@ -40,7 +40,7 @@ Ele usa consulta periodica da API do GitHub. Portanto, nao precisa de webhook, d
    npm start
    ```
 
-No primeiro ciclo, o bot apenas salva o commit atual como referencia e nao envia cards antigos. Os proximos commits serao publicados no intervalo configurado. O valor minimo aceito e 60 segundos; o padrao e 120 segundos.
+No primeiro ciclo, o bot apenas salva o commit atual como referencia e nao envia cards antigos. Os proximos commits serao publicados no intervalo configurado. O valor minimo aceito e 60 segundos;
 
 ## Eficiencia e limites
 
