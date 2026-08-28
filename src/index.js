@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
+import { ActivityType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 
 const requiredEnv = ['DISCORD_TOKEN', 'DISCORD_CHANNEL_ID', 'GITHUB_REPOSITORY'];
 const missing = requiredEnv.filter((key) => !process.env[key]);
@@ -119,9 +119,17 @@ function schedulePolling(channel, delay = 0) {
 
 discord.once('clientReady', async () => {
   console.log(`Bot conectado como ${discord.user.tag}`);
+  discord.user.setPresence({
+    status: "dnd",
+    activities [
+      {
+        name: "To vendo as porra dos commits nessa misera",
+        type: ActivityType.Custom
+      }
+    ]
+  })
   const channel = await discord.channels.fetch(process.env.DISCORD_CHANNEL_ID);
   if (!channel?.isTextBased()) throw new Error('DISCORD_CHANNEL_ID ta apontando pra um lugar errado seu fdp.');
-
   console.log(`A desgraça da consulta foi configurada para ${pollIntervalMs / 1000} segundos.`);
   schedulePolling(channel);
 });
