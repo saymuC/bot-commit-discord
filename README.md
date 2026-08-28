@@ -54,6 +54,8 @@ No primeiro ciclo, o bot apenas salva o commit atual como referencia e nao envia
 - Por seguranca contra spam e rate limits, envia no maximo cinco cards por ciclo por padrao. Quando houver mais pendentes, envia primeiro os mais antigos e continua no proximo ciclo, sem descartar os demais.
 - Se o SHA salvo nao estiver entre os 20 commits recebidos (por exemplo, apos force-push ou atividade intensa), o bot registra um aviso e envia apenas o commit mais recente, pois o restante nao pode ser reconstruido com seguranca.
 
+Em `SIGINT` ou `SIGTERM`, o bot interrompe o agendamento e fecha a conexão Discord antes de sair. Falhas na inicialização, como ID de canal inválido ou falta de permissão, são registradas e encerram o processo com código `1`.
+
 ## Hospedagem na Discloud
 
 O projeto ja inclui:

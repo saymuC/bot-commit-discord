@@ -34,7 +34,7 @@ let shuttingDown = false;
 let consecutiveFailures = 0;
 
 function resetFailureBackoff() {
-  if (consecutiveFailures > 0) console.log('A misera da conexão foi reestabelecida nesse caralho.');
+  if (consecutiveFailures > 0) console.log('Conexao com GitHub restabelecida.');
   consecutiveFailures = 0;
 }
 
@@ -42,7 +42,7 @@ function nextFailureDelay() {
   consecutiveFailures += 1;
   const delay = Math.min(pollIntervalMs * (2 ** (consecutiveFailures - 1)), 30 * 60 * 1000);
   if (consecutiveFailures === 3) {
-    console.warn('Essa porra falhou 3 vezes ao consultar a desgraça do Github. backoff progressivo ativado nesse caralho.');
+    console.warn('Tres falhas consecutivas ao consultar o GitHub; backoff progressivo ativado.');
   }
   return delay;
 }
@@ -124,7 +124,7 @@ async function checkForCommits(channel) {
   } catch (error) {
     const wasTimeout = error.name === 'TimeoutError' || error.name === 'AbortError'
       || error.cause?.name === 'TimeoutError';
-    console.error(wasTimeout ? 'Tempo limite de 15 seg nesse caralho pra consulta.' : 'DEU FALHA AO CONSULTAR A REDE CARALHO:', error);
+    console.error(wasTimeout ? 'Tempo limite de 15 segundos ao consultar o GitHub.' : 'Falha de rede ao consultar o GitHub:', error);
     return nextFailureDelay();
   }
   if (response.status === 304) {
@@ -203,33 +203,38 @@ discord.on('shardDisconnect', (event, shardId) => {
   console.warn(`Shard ${shardId} desconectado (codigo ${event.code}).`);
 });
 
-async function shutdown(signal) {
+async function shutdown(signal, exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   if (pollingTimer) clearTimeout(pollingTimer);
-  console.log(`Recebido ${signal}; vou dar um /kill na porra do bot (no caso eu mesmo).`);
+  console.log(`Recebi ${signal}; vou dar /kill na porra do bot.`);
   try {
-    discord.destroy();
+    await discord.destroy();
   } catch (error) {
-    console.error('DEU ERRO NA HORA DE MATAR O BOT CARALHOOOO:', error);
+    console.error('DEU ERRO AO MATAR ELE CARALHOOOOO:', error);
   }
-  process.exit(0);
+  process.exit(exitCode);
 }
 
 process.once('SIGINT', () => shutdown('SIGINT'));
 process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 discord.once('clientReady', async () => {
-  console.log(`Bot conectado como ${discord.user.tag}`);
-  discord.user.setPresence({
-    status: 'dnd',
-    activities: [{ name: 'To vendo as porra dos commits nessa misera', type: ActivityType.Watching }],
-  });
-  const channel = await discord.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-  if (!channel?.isTextBased()) throw new Error('DISCORD_CHANNEL_ID nao aponta para um canal de texto acessivel.');
-  await restoreState();
-  console.log(`A desgraça da consulta foi configurada para ${pollIntervalMs / 1000} segundos.`);
-  schedulePolling(channel);
+  try {
+    console.log(`Bot conectado como ${discord.user.tag}`);
+    discord.user.setPresence({
+      status: 'dnd',
+      activities: [{ name: 'To vendo as porra dos commits nessa misera', type: ActivityType.Watching }],
+    });
+    const channel = await discord.channels.fetch(process.env.DISCORD_CHANNEL_ID);
+    if (!channel?.isTextBased()) throw new Error('DISCORD_CHANNEL_ID nao aponta para um canal de texto acessivel.');
+    await restoreState();
+    console.log(`A desgraça da consulta foi configurada para ${pollIntervalMs / 1000} segundos.`);
+    schedulePolling(channel);
+  } catch (error) {
+    console.error('Falha ao inicializar a porra do monitor de commits:', error);
+    await shutdown('falha de inicializacao', 1);
+  }
 });
 
 discord.login(process.env.DISCORD_TOKEN);
