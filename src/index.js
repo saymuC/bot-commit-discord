@@ -34,6 +34,7 @@ let pollingTimer;
 let shuttingDown = false;
 let consecutiveFailures = 0;
 let stateDirectoryReady;
+let shutdownTimeout;
 
 function resetFailureBackoff() {
   if (consecutiveFailures > 0) console.log('Conexao com GitHub restabelecida.');
@@ -55,7 +56,12 @@ function shortSha(sha = '') {
 
 async function prepareStateDirectory() {
   if (!stateDirectoryReady) stateDirectoryReady = mkdir(stateDirectory, { recursive: true });
-  await stateDirectoryReady;
+  try {
+    await stateDirectoryReady;
+  } catch (error) {
+    stateDirectoryReady = undefined;
+    throw error;
+  }
 }
 
 async function restoreState() {
@@ -210,16 +216,20 @@ discord.on('shardDisconnect', (event, shardId) => {
 });
 
 async function shutdown(signal, exitCode = 0) {
+  process.exitCode = Math.max(process.exitCode || 0, exitCode);
   if (shuttingDown) return;
   shuttingDown = true;
   if (pollingTimer) clearTimeout(pollingTimer);
+  shutdownTimeout = setTimeout(() => process.exit(process.exitCode || 1), 5_000);
+  shutdownTimeout.unref();
   console.log(`Recebi ${signal}; vou dar /kill na porra do bot.`);
   try {
     await discord.destroy();
   } catch (error) {
     console.error('DEU ERRO AO MATAR ELE CARALHOOOOO:', error);
   }
-  process.exit(exitCode);
+  clearTimeout(shutdownTimeout);
+  process.exit(process.exitCode);
 }
 
 process.once('SIGINT', () => shutdown('SIGINT'));
