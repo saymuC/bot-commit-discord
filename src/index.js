@@ -23,6 +23,7 @@ if (!owner || !repository || repositoryParts.length !== 2) {
 
 const pollIntervalMs = Math.max(Number(process.env.POLL_INTERVAL_SECONDS || 120), 60) * 1000;
 const maxCommitsPerCheck = Math.min(Math.max(Number(process.env.MAX_COMMITS_PER_CHECK || 5), 1), 10);
+const discordSendDelayMs = Math.min(Math.max(Number(process.env.DISCORD_SEND_DELAY_MS || 250), 0), 5_000);
 const branch = process.env.GITHUB_BRANCH || 'main';
 const commitsUrl = new URL(`https://api.github.com/repos/${owner}/${repository}/commits`);
 commitsUrl.searchParams.set('sha', branch);
@@ -40,6 +41,7 @@ let shuttingDown = false;
 let consecutiveFailures = 0;
 let stateDirectoryReady;
 let shutdownTimeout;
+let stateNeedsPersistence = false;
 
 function resetFailureBackoff() {
   if (consecutiveFailures > 0) console.log('Conexao com GitHub restabelecida.');
@@ -93,15 +95,23 @@ async function persistState() {
   try {
     await writeFile(temporaryFile, state, 'utf8');
     await rename(temporaryFile, stateFile);
+    stateNeedsPersistence = false;
   } catch (error) {
+    stateNeedsPersistence = true;
     console.error('Nao foi possivel salvar o estado do monitor:', error);
+    throw error;
   }
+}
+
+function escapeMarkdown(value) {
+  return value.replace(/([\\*_~`|>\[\]()])/g, '\\$1');
 }
 
 function commitEmbed(commit) {
   const author = commit.author?.login || commit.commit.author?.name || 'Autor desconhecido';
   const avatar = commit.author?.avatar_url;
-  const message = (commit.commit.message || 'Sem mensagem').split('\n')[0].slice(0, 250);
+  // O limite abaixo tambem deixa margem para as barras adicionadas ao escapar Markdown.
+  const message = escapeMarkdown((commit.commit.message || 'Sem mensagem').split('\n')[0]).slice(0, 250);
 
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
@@ -152,6 +162,7 @@ async function checkForCommits(channel) {
   }
   if (response.status === 304) {
     resetFailureBackoff();
+    if (stateNeedsPersistence) await persistState();
     return pollIntervalMs;
   }
   if (!response.ok) {
@@ -171,7 +182,10 @@ async function checkForCommits(channel) {
     console.log(`Monitorando ${owner}/${repository} (${branch}) a partir de ${shortSha(newestSha)}.`);
     return pollIntervalMs;
   }
-  if (newestSha === lastKnownSha) return pollIntervalMs;
+  if (newestSha === lastKnownSha) {
+    if (stateNeedsPersistence) await persistState();
+    return pollIntervalMs;
+  }
 
   const previousIndex = commits.findIndex((commit) => commit.sha === lastKnownSha);
   if (previousIndex === -1) {
@@ -181,7 +195,8 @@ async function checkForCommits(channel) {
     );
   }
 
-  const unseen = previousIndex === -1 ? [commits[0]] : commits.slice(0, previousIndex);
+  // Sem o SHA anterior, tratamos toda a janela retornada como possivelmente nova.
+  const unseen = previousIndex === -1 ? commits : commits.slice(0, previousIndex);
   const hasMoreCommits = unseen.length > maxCommitsPerCheck;
   // A API retorna do mais novo ao mais antigo. Enviamos primeiro os mais antigos.
   const toSend = (hasMoreCommits ? unseen.slice(-maxCommitsPerCheck) : unseen).reverse();
@@ -200,6 +215,9 @@ async function checkForCommits(channel) {
     }
     lastKnownSha = commit.sha;
     await persistState();
+    if (discordSendDelayMs > 0 && commit !== toSend.at(-1)) {
+      await new Promise((resolve) => setTimeout(resolve, discordSendDelayMs));
+    }
   }
   // Ainda existem commits pendentes; um 304 nao pode ocultar essa fila.
   if (hasMoreCommits) etag = undefined;

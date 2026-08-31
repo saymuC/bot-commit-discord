@@ -28,6 +28,7 @@ Ele usa consulta periodica da API do GitHub. Portanto, nao precisa de webhook, d
    GITHUB_TOKEN=github_pat_seu_token
    POLL_INTERVAL_SECONDS=60
    MAX_COMMITS_PER_CHECK=5
+   DISCORD_SEND_DELAY_MS=250
    ```
 
    `GITHUB_REPOSITORY` aceita `dono/repositorio` ou uma URL completa, por exemplo `https://github.com/dono/repositorio`.
@@ -53,8 +54,9 @@ No primeiro ciclo, o bot apenas salva o commit atual como referencia e nao envia
 - O encerramento possui uma saída de segurança de cinco segundos: se a desconexão do Discord travar, o processo termina com código de erro em vez de permanecer pendurado.
 - Timeout de rede, erros do cliente Discord e desconexões de shard são registrados com contexto. Em `SIGINT` ou `SIGTERM`, o bot interrompe o agendamento e fecha a conexão Discord antes de sair.
 - O SHA do ultimo card confirmado e salvo em `.commit-monitor-state.json`; reinicios no mesmo ambiente retomam a partir dele. O arquivo e ignorado pelo Git e pela Discloud para nao transportar estado antigo em um novo deploy.
-- Por seguranca contra spam e rate limits, envia no maximo cinco cards por ciclo por padrao. Quando houver mais pendentes, envia primeiro os mais antigos e continua no proximo ciclo, sem descartar os demais.
-- Se o SHA salvo nao estiver entre os 20 commits recebidos (por exemplo, apos force-push ou atividade intensa), o bot registra um aviso e envia apenas o commit mais recente, pois o restante nao pode ser reconstruido com seguranca.
+- Por seguranca contra spam e rate limits, envia no maximo cinco cards por ciclo por padrao. Quando houver mais pendentes, envia primeiro os mais antigos e continua no proximo ciclo, sem descartar os demais. Entre cards, espera 250 ms por padrao; ajuste `DISCORD_SEND_DELAY_MS` entre 0 e 5000 se necessario.
+- Se o SHA salvo nao estiver entre os 20 commits recebidos (por exemplo, apos force-push ou atividade intensa), o bot registra um aviso e trata toda essa janela como possivelmente nova, respeitando o limite por ciclo. Assim, os cards sao enviados gradualmente em vez de descartar commits intermediarios.
+- Titulos de commits escapam Markdown antes de serem usados no embed. O bot responde a mencoes em qualquer canal ao qual tenha acesso.
 
 Em `SIGINT` ou `SIGTERM`, o bot interrompe o agendamento e fecha a conexão Discord antes de sair. Falhas na inicialização, como ID de canal inválido ou falta de permissão, são registradas e encerram o processo com código `1`.
 
