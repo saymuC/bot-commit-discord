@@ -24,18 +24,16 @@ if (!owner || !repository || repositoryParts.length !== 2) {
 const pollIntervalMs = Math.max(Number(process.env.POLL_INTERVAL_SECONDS || 120), 60) * 1000;
 const maxCommitsPerCheck = Math.min(Math.max(Number(process.env.MAX_COMMITS_PER_CHECK || 5), 1), 10);
 const discordSendDelayMs = Math.min(Math.max(Number(process.env.DISCORD_SEND_DELAY_MS || 250), 0), 5_000);
-const branch = process.env.GITHUB_BRANCH || 'main';
-const commitsUrl = new URL(`https://api.github.com/repos/${owner}/${repository}/commits`);
-commitsUrl.searchParams.set('sha', branch);
-commitsUrl.searchParams.set('per_page', '20');
+const branchesUrl = new URL(`https://api.github.com/repos/${owner}/${repository}/branches`);
+branchesUrl.searchParams.set('per_page', '100');
 const stateFile = path.resolve(process.env.STATE_FILE || '.commit-monitor-state.json');
 const stateDirectory = path.dirname(stateFile);
 
 const discord = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
-let etag;
-let lastKnownSha;
+const branchEtags = new Map();
+let lastKnownShas = {};
 let pollingTimer;
 let shuttingDown = false;
 let consecutiveFailures = 0;
@@ -80,9 +78,17 @@ async function prepareStateDirectory() {
 async function restoreState() {
   try {
     const state = JSON.parse(await readFile(stateFile, 'utf8'));
-    if (state.repository === repositoryReference && state.branch === branch && state.lastKnownSha) {
-      lastKnownSha = state.lastKnownSha;
-      console.log(`Estado restaurado: ultimo commit ${shortSha(lastKnownSha)}.`);
+    if (state.repository !== repositoryReference) return;
+
+    if (state.branches && typeof state.branches === 'object') {
+      lastKnownShas = Object.fromEntries(
+        Object.entries(state.branches).filter(([, sha]) => typeof sha === 'string' && sha),
+      );
+      console.log(`Estado restaurado para ${Object.keys(lastKnownShas).length} branch(es).`);
+    } else if (state.branch && state.lastKnownSha) {
+      // Migra o estado usado pelas versoes que monitoravam uma unica branch.
+      lastKnownShas = { [state.branch]: state.lastKnownSha };
+      console.log(`Estado restaurado para ${state.branch}: ${shortSha(state.lastKnownSha)}.`);
     }
   } catch (error) {
     if (error.code !== 'ENOENT') console.warn('Nao foi possivel restaurar o estado do monitor:', error);
@@ -91,7 +97,7 @@ async function restoreState() {
 
 async function persistState() {
   const temporaryFile = `${stateFile}.tmp`;
-  const state = JSON.stringify({ repository: repositoryReference, branch, lastKnownSha });
+  const state = JSON.stringify({ repository: repositoryReference, branches: lastKnownShas });
   try {
     await writeFile(temporaryFile, state, 'utf8');
     await rename(temporaryFile, stateFile);
@@ -107,7 +113,7 @@ function escapeMarkdown(value) {
   return value.replace(/([\\*_~`|>\[\]()])/g, '\\$1');
 }
 
-function commitEmbed(commit) {
+function commitEmbed(commit, branch) {
   const author = commit.author?.login || commit.commit.author?.name || 'Autor desconhecido';
   const avatar = commit.author?.avatar_url;
   // O limite abaixo tambem deixa margem para as barras adicionadas ao escapar Markdown.
@@ -143,84 +149,146 @@ function waitForRateLimit(response) {
   return pollIntervalMs;
 }
 
-async function checkForCommits(channel) {
+function githubHeaders(etag) {
   const headers = {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
   };
   if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   if (etag) headers['If-None-Match'] = etag;
+  return headers;
+}
 
-  let response;
-  try {
-    response = await fetch(commitsUrl, { headers, signal: AbortSignal.timeout(15_000) });
-  } catch (error) {
-    const wasTimeout = error.name === 'TimeoutError' || error.name === 'AbortError'
-      || error.cause?.name === 'TimeoutError';
-    console.error(wasTimeout ? 'Tempo limite de 15 segundos ao consultar o GitHub.' : 'Falha de rede ao consultar o GitHub:', error);
-    return nextFailureDelay();
-  }
-  if (response.status === 304) {
-    resetFailureBackoff();
-    if (stateNeedsPersistence) await persistState();
-    return pollIntervalMs;
-  }
-  if (!response.ok) {
-    console.error(`GitHub respondeu ${response.status}: ${await response.text()}`);
-    return Math.max(waitForRateLimit(response), nextFailureDelay());
+async function fetchBranches() {
+  const branches = [];
+  let url = branchesUrl;
+
+  while (url) {
+    let response;
+    try {
+      response = await fetch(url, { headers: githubHeaders(), signal: AbortSignal.timeout(15_000) });
+    } catch (error) {
+      const wasTimeout = error.name === 'TimeoutError' || error.name === 'AbortError'
+        || error.cause?.name === 'TimeoutError';
+      console.error(wasTimeout ? 'Tempo limite de 15 segundos ao listar as branches do GitHub.' : 'Falha de rede ao listar as branches do GitHub:', error);
+      return { errorDelay: nextFailureDelay() };
+    }
+    if (!response.ok) {
+      console.error(`GitHub respondeu ${response.status} ao listar as branches: ${await response.text()}`);
+      return { errorDelay: Math.max(waitForRateLimit(response), nextFailureDelay()) };
+    }
+
+    const page = await response.json();
+    if (!Array.isArray(page)) {
+      console.error('GitHub retornou uma lista de branches em formato invalido.');
+      return { errorDelay: nextFailureDelay() };
+    }
+    branches.push(...page.map((item) => item.name).filter(Boolean));
+    const next = response.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/);
+    url = next ? new URL(next[1]) : undefined;
   }
 
   resetFailureBackoff();
-  etag = response.headers.get('etag') || etag;
+  return { branches };
+}
+
+async function checkBranchForCommits(channel, branch, remaining) {
+  if (remaining === 0) return { sent: 0, hasPending: true };
+
+  const commitsUrl = new URL(`https://api.github.com/repos/${owner}/${repository}/commits`);
+  commitsUrl.searchParams.set('sha', branch);
+  commitsUrl.searchParams.set('per_page', '20');
+
+  let response;
+  try {
+    response = await fetch(commitsUrl, {
+      headers: githubHeaders(branchEtags.get(branch)),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) {
+    const wasTimeout = error.name === 'TimeoutError' || error.name === 'AbortError'
+      || error.cause?.name === 'TimeoutError';
+    console.error(wasTimeout ? `Tempo limite de 15 segundos ao consultar a branch ${branch}.` : `Falha de rede ao consultar a branch ${branch}:`, error);
+    return { errorDelay: nextFailureDelay() };
+  }
+  if (response.status === 304) return { sent: 0 };
+  if (!response.ok) {
+    console.error(`GitHub respondeu ${response.status} na branch ${branch}: ${await response.text()}`);
+    return { errorDelay: Math.max(waitForRateLimit(response), nextFailureDelay()) };
+  }
+
+  branchEtags.set(branch, response.headers.get('etag'));
   const commits = await response.json();
-  if (!Array.isArray(commits) || commits.length === 0) return pollIntervalMs;
+  if (!Array.isArray(commits) || commits.length === 0) return { sent: 0 };
 
   const newestSha = commits[0].sha;
+  const lastKnownSha = lastKnownShas[branch];
   if (!lastKnownSha) {
-    lastKnownSha = newestSha;
+    lastKnownShas[branch] = newestSha;
     await persistState();
     console.log(`Monitorando ${owner}/${repository} (${branch}) a partir de ${shortSha(newestSha)}.`);
-    return pollIntervalMs;
+    return { sent: 0 };
   }
-  if (newestSha === lastKnownSha) {
-    if (stateNeedsPersistence) await persistState();
-    return pollIntervalMs;
-  }
+  if (newestSha === lastKnownSha) return { sent: 0 };
 
   const previousIndex = commits.findIndex((commit) => commit.sha === lastKnownSha);
   if (previousIndex === -1) {
     console.warn(
-      `O ultimo SHA ${shortSha(lastKnownSha)} nao esta entre os 20 commits retornados. `
+      `O ultimo SHA ${shortSha(lastKnownSha)} da branch ${branch} nao esta entre os 20 commits retornados. `
       + 'O historico pode ter sido reescrito ou ser maior que a janela de consulta.',
     );
   }
 
-  // Sem o SHA anterior, tratamos toda a janela retornada como possivelmente nova.
   const unseen = previousIndex === -1 ? commits : commits.slice(0, previousIndex);
-  const hasMoreCommits = unseen.length > maxCommitsPerCheck;
-  // A API retorna do mais novo ao mais antigo. Enviamos primeiro os mais antigos.
-  const toSend = (hasMoreCommits ? unseen.slice(-maxCommitsPerCheck) : unseen).reverse();
+  const hasMoreCommits = unseen.length > remaining;
+  const toSend = (hasMoreCommits ? unseen.slice(-remaining) : unseen).reverse();
 
   if (hasMoreCommits) {
-    console.warn(`${unseen.length} commits novos detectados; enviando os ${toSend.length} mais antigos neste ciclo.`);
+    console.warn(`${unseen.length} commits novos detectados na branch ${branch}; enviando os ${toSend.length} mais antigos neste ciclo.`);
   }
   for (const commit of toSend) {
     try {
-      await channel.send({ embeds: [commitEmbed(commit)] });
+      await channel.send({ embeds: [commitEmbed(commit, branch)] });
     } catch (error) {
-      // Sem isso, o ETag atual resultaria em 304 e impediria a nova tentativa.
-      etag = undefined;
-      console.error(`Falha ao enviar o card do commit ${shortSha(commit.sha)}:`, error);
+      branchEtags.delete(branch);
+      console.error(`Falha ao enviar o card do commit ${shortSha(commit.sha)} da branch ${branch}:`, error);
       throw error;
     }
-    lastKnownSha = commit.sha;
+    lastKnownShas[branch] = commit.sha;
     await persistState();
     if (discordSendDelayMs > 0 && commit !== toSend.at(-1)) {
       await new Promise((resolve) => setTimeout(resolve, discordSendDelayMs));
     }
   }
-  // Ainda existem commits pendentes; um 304 nao pode ocultar essa fila.
-  if (hasMoreCommits) etag = undefined;
+  if (hasMoreCommits) branchEtags.delete(branch);
+  return { sent: toSend.length, hasPending: hasMoreCommits };
+}
+
+async function checkForCommits(channel) {
+  const branchResult = await fetchBranches();
+  if (branchResult.errorDelay) return branchResult.errorDelay;
+
+  const activeBranches = new Set(branchResult.branches);
+  let removedState = false;
+  for (const branch of Object.keys(lastKnownShas)) {
+    if (!activeBranches.has(branch)) {
+      delete lastKnownShas[branch];
+      branchEtags.delete(branch);
+      removedState = true;
+    }
+  }
+  if (removedState) await persistState();
+
+  let remaining = maxCommitsPerCheck;
+  for (const branch of branchResult.branches) {
+    const result = await checkBranchForCommits(channel, branch, remaining);
+    if (result.errorDelay) return result.errorDelay;
+    remaining -= result.sent;
+    if (remaining === 0) break;
+  }
+
+  resetFailureBackoff();
+  if (stateNeedsPersistence) await persistState();
   return pollIntervalMs;
 }
 
@@ -306,7 +374,7 @@ discord.once('clientReady', async () => {
       const requestsPerHour = Math.ceil(3_600_000 / pollIntervalMs);
       console.warn(
         `GITHUB_TOKEN nao definido: a API permite cerca de 60 consultas por hora sem autenticacao. `
-        + `Com o intervalo atual, o bot pode fazer ate ${requestsPerHour} consultas por hora.`,
+        + `Com o intervalo atual, o bot faz ao menos ${requestsPerHour} consultas por hora e mais uma por branch monitorada.`,
       );
     }
     console.log(`A desgraça da consulta foi configurada para ${pollIntervalMs / 1000} segundos.`);

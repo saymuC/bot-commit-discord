@@ -1,6 +1,6 @@
 # Bot Discord — commits do GitHub
 
-Bot Discord que monitora uma branch de um repositorio GitHub e publica cards com os novos commits em um canal configurado.
+Bot Discord que monitora todas as branches de um repositorio GitHub e publica cards com os novos commits em um canal configurado.
 
 Ele usa consulta periodica da API do GitHub. Portanto, nao precisa de webhook, dominio, ngrok ou servidor HTTP publico
 ## Requisitos
@@ -24,7 +24,6 @@ Ele usa consulta periodica da API do GitHub. Portanto, nao precisa de webhook, d
    DISCORD_TOKEN=seu_token_do_discord
    DISCORD_CHANNEL_ID=123456789012345678
    GITHUB_REPOSITORY=seu-usuario/seu-repositorio
-   GITHUB_BRANCH=main
    GITHUB_TOKEN=github_pat_seu_token
    POLL_INTERVAL_SECONDS=60
    MAX_COMMITS_PER_CHECK=5
@@ -41,11 +40,12 @@ Ele usa consulta periodica da API do GitHub. Portanto, nao precisa de webhook, d
    npm start
    ```
 
-No primeiro ciclo, o bot apenas salva o commit atual como referencia e nao envia cards antigos. Os proximos commits serao publicados no intervalo configurado. O valor minimo aceito e 60 segundos;
+No primeiro ciclo, o bot apenas salva o commit atual de cada branch como referencia e nao envia cards antigos. Os proximos commits serao publicados no intervalo configurado. O valor minimo aceito e 60 segundos;
 
 ## Eficiencia e limites
 
-- Usa `ETag` e `If-None-Match`: quando nao existem novidades, o GitHub responde `304 Not Modified`, sem transferir a lista de commits.
+- Descobre todas as branches (inclusive quando ha mais de 100, por paginacao) e consulta os commits de cada uma; o card informa a branch de origem.
+- Usa `ETag` e `If-None-Match` por branch: quando nao existem novidades, o GitHub responde `304 Not Modified`, sem transferir a lista de commits.
 - Com token GitHub, respostas condicionais `304` nao consomem o limite primario da API.
 - Nunca executa consultas em paralelo, aplica timeout de 15 segundos e espera automaticamente quando a API informa limite de taxa.
 - Falhas transitórias e respostas de erro usam backoff exponencial, de até 30 minutos, reduzindo consumo e ruído de logs em indisponibilidades prolongadas.
@@ -53,7 +53,7 @@ No primeiro ciclo, o bot apenas salva o commit atual como referencia e nao envia
 - O diretório do arquivo de estado é preparado uma vez na inicialização. Handlers globais registram rejeições e exceções não tratadas antes de encerrar o processo.
 - O encerramento possui uma saída de segurança de cinco segundos: se a desconexão do Discord travar, o processo termina com código de erro em vez de permanecer pendurado.
 - Timeout de rede, erros do cliente Discord e desconexões de shard são registrados com contexto. Em `SIGINT` ou `SIGTERM`, o bot interrompe o agendamento e fecha a conexão Discord antes de sair.
-- O SHA do ultimo card confirmado e salvo em `.commit-monitor-state.json`; reinicios no mesmo ambiente retomam a partir dele. O arquivo e ignorado pelo Git e pela Discloud para nao transportar estado antigo em um novo deploy.
+- O SHA do ultimo card confirmado e salvo por branch em `.commit-monitor-state.json`; reinicios no mesmo ambiente retomam a partir deles. O arquivo e ignorado pelo Git e pela Discloud para nao transportar estado antigo em um novo deploy.
 - Por seguranca contra spam e rate limits, envia no maximo cinco cards por ciclo por padrao. Quando houver mais pendentes, envia primeiro os mais antigos e continua no proximo ciclo, sem descartar os demais. Entre cards, espera 250 ms por padrao; ajuste `DISCORD_SEND_DELAY_MS` entre 0 e 5000 se necessario.
 - Se o SHA salvo nao estiver entre os 20 commits recebidos (por exemplo, apos force-push ou atividade intensa), o bot registra um aviso e trata toda essa janela como possivelmente nova, respeitando o limite por ciclo. Assim, os cards sao enviados gradualmente em vez de descartar commits intermediarios.
 - Titulos de commits escapam Markdown antes de serem usados no embed. O bot responde a mencoes em qualquer canal ao qual tenha acesso.
