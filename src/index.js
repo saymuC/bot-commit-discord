@@ -34,6 +34,7 @@ const discord = new Client({
 });
 const branchEtags = new Map();
 let lastKnownShas = {};
+let branchSnapshotReady = false;
 let pollingTimer;
 let shuttingDown = false;
 let consecutiveFailures = 0;
@@ -84,6 +85,7 @@ async function restoreState() {
       lastKnownShas = Object.fromEntries(
         Object.entries(state.branches).filter(([, sha]) => typeof sha === 'string' && sha),
       );
+      branchSnapshotReady = state.branchSnapshotReady === true;
       console.log(`Estado restaurado para ${Object.keys(lastKnownShas).length} branch(es).`);
     } else if (state.branch && state.lastKnownSha) {
       // Migra o estado usado pelas versoes que monitoravam uma unica branch.
@@ -97,7 +99,11 @@ async function restoreState() {
 
 async function persistState() {
   const temporaryFile = `${stateFile}.tmp`;
-  const state = JSON.stringify({ repository: repositoryReference, branches: lastKnownShas });
+  const state = JSON.stringify({
+    repository: repositoryReference,
+    branchSnapshotReady,
+    branches: lastKnownShas,
+  });
   try {
     await writeFile(temporaryFile, state, 'utf8');
     await rename(temporaryFile, stateFile);
@@ -116,6 +122,7 @@ function escapeMarkdown(value) {
 function commitEmbed(commit, branch) {
   const author = commit.author?.login || commit.commit.author?.name || 'Autor desconhecido';
   const avatar = commit.author?.avatar_url;
+  const isMerge = Array.isArray(commit.parents) && commit.parents.length > 1;
   // O limite abaixo tambem deixa margem para as barras adicionadas ao escapar Markdown.
   const message = escapeMarkdown((commit.commit.message || 'Sem mensagem').split('\n')[0]).slice(0, 250);
 
@@ -124,10 +131,13 @@ function commitEmbed(commit, branch) {
     .setAuthor({ name: `${owner}/${repository} • novo commit` })
     .setTitle(message)
     .setURL(commit.html_url)
-    .setDescription(`[${shortSha(commit.sha)}](${commit.html_url}) enviado para **${branch}**`)
+    .setDescription(isMerge
+      ? `[${shortSha(commit.sha)}](${commit.html_url}) mesclado na branch **${branch}**`
+      : `[${shortSha(commit.sha)}](${commit.html_url}) enviado para **${branch}**`)
     .addFields(
       { name: 'Autor', value: author, inline: true },
       { name: 'Branch', value: branch, inline: true },
+      ...(isMerge ? [{ name: 'Evento', value: 'Merge entre branches', inline: true }] : []),
       { name: 'Repositório', value: `[${repository}](https://github.com/${owner}/${repository})`, inline: true },
     )
     .setTimestamp(new Date(commit.commit.author?.date || Date.now()))
@@ -135,6 +145,21 @@ function commitEmbed(commit, branch) {
 
   if (avatar) embed.setThumbnail(avatar);
   return embed;
+}
+
+function branchCreatedEmbed(branch, sha) {
+  const branchUrl = `https://github.com/${owner}/${repository}/tree/${encodeURIComponent(branch)}`;
+  return new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle(`Branch criada: ${branch}`)
+    .setURL(branchUrl)
+    .setDescription(`A branch **${escapeMarkdown(branch)}** foi detectada no repositorio.`)
+    .addFields(
+      { name: 'Branch', value: branch, inline: true },
+      { name: 'Commit atual', value: `[${shortSha(sha)}](${branchUrl})`, inline: true },
+    )
+    .setTimestamp()
+    .setFooter({ text: 'GitHub -> Discord' });
 }
 
 function waitForRateLimit(response) {
@@ -183,7 +208,7 @@ async function fetchBranches() {
       console.error('GitHub retornou uma lista de branches em formato invalido.');
       return { errorDelay: nextFailureDelay() };
     }
-    branches.push(...page.map((item) => item.name).filter(Boolean));
+    branches.push(...page.filter((item) => item?.name));
     const next = response.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/);
     url = next ? new URL(next[1]) : undefined;
   }
@@ -268,7 +293,7 @@ async function checkForCommits(channel) {
   const branchResult = await fetchBranches();
   if (branchResult.errorDelay) return branchResult.errorDelay;
 
-  const activeBranches = new Set(branchResult.branches);
+  const activeBranches = new Set(branchResult.branches.map((item) => item.name));
   let removedState = false;
   for (const branch of Object.keys(lastKnownShas)) {
     if (!activeBranches.has(branch)) {
@@ -280,13 +305,32 @@ async function checkForCommits(channel) {
   if (removedState) await persistState();
 
   let remaining = maxCommitsPerCheck;
-  for (const branch of branchResult.branches) {
+  for (const { name: branch, commit } of branchResult.branches) {
+    if (branchSnapshotReady && !Object.hasOwn(lastKnownShas, branch)) {
+      if (remaining === 0) break;
+      try {
+        await channel.send({ embeds: [branchCreatedEmbed(branch, commit?.sha)] });
+      } catch (error) {
+        console.error(`Falha ao enviar o card da nova branch ${branch}:`, error);
+        throw error;
+      }
+      if (commit?.sha) {
+        lastKnownShas[branch] = commit.sha;
+        await persistState();
+      }
+      remaining -= 1;
+      if (remaining === 0) break;
+    }
     const result = await checkBranchForCommits(channel, branch, remaining);
     if (result.errorDelay) return result.errorDelay;
     remaining -= result.sent;
     if (remaining === 0) break;
   }
 
+  if (!branchSnapshotReady) {
+    branchSnapshotReady = true;
+    await persistState();
+  }
   resetFailureBackoff();
   if (stateNeedsPersistence) await persistState();
   return pollIntervalMs;

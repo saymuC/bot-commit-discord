@@ -44,7 +44,8 @@ No primeiro ciclo, o bot apenas salva o commit atual de cada branch como referen
 
 ## Eficiencia e limites
 
-- Descobre todas as branches (inclusive quando ha mais de 100, por paginacao) e consulta os commits de cada uma; o card informa a branch de origem.
+- Descobre todas as branches (inclusive quando ha mais de 100, por paginacao) e consulta os commits de cada uma; quando uma nova branch e criada, envia um card proprio com seu commit atual.
+- Commits de merge (com mais de um pai) sao identificados no card como **Merge entre branches**, indicando a branch de destino. Merges por squash ou rebase nao criam um commit de merge no Git e, portanto, aparecem como commits comuns.
 - Usa `ETag` e `If-None-Match` por branch: quando nao existem novidades, o GitHub responde `304 Not Modified`, sem transferir a lista de commits.
 - Com token GitHub, respostas condicionais `304` nao consomem o limite primario da API.
 - Nunca executa consultas em paralelo, aplica timeout de 15 segundos e espera automaticamente quando a API informa limite de taxa.
