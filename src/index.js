@@ -3,8 +3,82 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ActivityType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 
-const mentionWithText = "{user} eu não to entendendo porra nenhuma, mas tô aqui igual um filha da puta olhando a porra dos commit";
-const mentionText = "{user} oq foi caralho? tem demência filha da puta? para de me marcar seu randola de merda"
+const mentionWithTextList = {
+  "1": "{user} eu não to entendendo porra nenhuma, mas tô aqui igual um filha da puta olhando a porra dos commit",
+  "2": "vai se fuder {user} seu filha de uma puta, para me marcar randola de merda",
+  "3": "seu coagulo de merda inutil, lixo humano, aborto mal sucedido, sempai {user}",
+  "4": "manito hijo de puta madre, cabron safado de mierda, un real e 50 mil pesos {user}",
+  "5": "Beibe beibe do biru leibe beibe, filha da puta {user}",
+  "6": "u son of a bitch {user}, nigger motherfucker nigga, sybau nigger"
+};
+
+const mentioTextList = {
+  "1": "{user} oq foi caralho? tem demência filha da puta? para de me marcar seu randola de merda",
+  "2": "vai marcar a puta da tua mãe seu filha da puta arrombado {user}",
+  "3": "{user} Ó criatura de espírito tacanho e trato enfadonho, cuja presença é tão aprazível quanto uma febre terçã em pleno estio. Poupa-me de teus impropérios, pois já me basta suportar a indigência de teu raciocínio e a assombrosa desenvoltura com que fazes alarde da própria sandice. És um néscio de rara estirpe, um biltre de compostura duvidosa, cuja prosápia excede em muito o parco cabedal de inteligência que a natureza houve por bem conceder-te. Cada palavra que profere tua boca parece fruto de longa altercação entre a ignorância e o despautério. ai, pois, importunar outra alma mais caridosa, antes que eu seja compelido a dedicar mais atenção a tão insignificante espécime de impertinência.",
+  "4": `
+  {user} Man, these people took my kids from me
+Then they closed my bank account
+I got so much anger in me, got no way to take it out
+Think that I'm stuck in a matrix
+Where the fuck's my nitrous?
+Yes, I am a cuck, I like when people fuck on my bitch
+The shit that I'm posting on Twitter
+They telling me, "Ye, don't say that"
+How niggas can't see me in public?
+I'm driving a all chrome Maybach
+With all of the money and fame
+I still can't get my kids back
+With all of the money and fame
+I still don't get to see my children
+Niggas see my Twitter but
+
+they don't see how I be feeling
+So I became a Nazi
+Yeah, bitch, I'm the villain
+
+Nigga, heil Hitler
+Nigga, heil Hitler
+They don't understand the things I say on Twitter
+Nigga, heil Hitler
+They don't understand the things I say on Twitter
+All my niggas Nazis
+Nigga, heil Hitler
+Nigga, heil Hitler
+Nigga, heil Hitler
+All my niggas Nazis
+Nigga, heil Hitler
+
+She wanna fuck in Japan
+I put the chrome on the Benz
+Nigga, heil Hitler
+She reaching down in my pants
+She got the world in her hands
+
+Nigga, heil Hitler
+Nigga, heil Hitler
+Nigga, heil Hitler
+All my niggas Nazis
+Nigga, heil Hitler
+Nigga, heil Hitler
+Nigga, heil Hitler
+All my niggas Nazis
+Nigga, heil Hitler
+Nigga, heil Hitler
+Nigga, heil Hitler
+Nigga, heil Hitler
+Nigga, heil Hitler
+
+Ob du meine Arbeit für richtig hältst
+Ob du glaubst, dass ich fleißig gewesen bin
+Dass ich gearbeitet habe
+dass ich mich in diesen Jahren für dich eingesetzt habe
+Dass ich meine Zeit anständig im Dienste meines Volkes verwendet habe
+Gib jetzt deine Stimme ab.
+Wenn ja, dann tritt für mich ein, so wie ich für dich eingetreten bin
+  `,
+  "5": "{user} Vai tomar no cu filha da puta, para de me marcar ô filha de uma puta, arrombado filha da puta"
+}
 
 const requiredEnv = ['DISCORD_TOKEN', 'DISCORD_CHANNEL_ID', 'GITHUB_REPOSITORY'];
 const missing = requiredEnv.filter((key) => !process.env[key]);
@@ -64,6 +138,11 @@ function mentionResponse(template, user) {
   return template
     .replaceAll('{user}', `<@${user.id}>`)
     .replaceAll('{name}', user.username);
+}
+
+function randomMentionTemplate(list) {
+  const templates = Object.values(list);
+  return templates[Math.floor(Math.random() * templates.length)];
 }
 
 async function prepareStateDirectory() {
@@ -362,8 +441,8 @@ discord.on('messageCreate', async (message) => {
   const mention = new RegExp(`<@!?${discord.user.id}>`, 'g');
   const textAfterMention = message.content.replace(mention, '').trim();
   const template = textAfterMention
-    ? (mentionWithText)
-    : (mentionText);
+    ? randomMentionTemplate(mentioTextList)
+    : randomMentionTemplate(mentionWithTextList);
 
   try {
     await message.reply({
