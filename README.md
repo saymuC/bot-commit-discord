@@ -44,7 +44,8 @@ No primeiro ciclo, o bot apenas salva o commit atual de cada branch como referen
 
 ## Eficiencia e limites
 
-- Descobre todas as branches (inclusive quando ha mais de 100, por paginacao) e consulta os commits de cada uma; quando uma nova branch e criada, envia um card proprio com seu commit atual.
+- Descobre todas as branches (inclusive quando ha mais de 100, por paginacao) e consulta os commits de cada uma. Ao detectar uma nova branch, envia o card de criacao e tambem os commits feitos depois do ponto conhecido de origem da branch.
+- Cada SHA de commit comum e anunciado somente uma vez, mesmo quando ele passa para outra branch por merge ou fast-forward. O card de um commit de merge continua sendo enviado na branch de destino, pois representa uma nova acao de integracao.
 - Commits de merge (com mais de um pai) sao identificados no card como **Merge entre branches**, indicando a branch de destino. Merges por squash ou rebase nao criam um commit de merge no Git e, portanto, aparecem como commits comuns.
 - Usa `ETag` e `If-None-Match` por branch: quando nao existem novidades, o GitHub responde `304 Not Modified`, sem transferir a lista de commits.
 - Com token GitHub, respostas condicionais `304` nao consomem o limite primario da API.
@@ -54,7 +55,7 @@ No primeiro ciclo, o bot apenas salva o commit atual de cada branch como referen
 - O diretório do arquivo de estado é preparado uma vez na inicialização. Handlers globais registram rejeições e exceções não tratadas antes de encerrar o processo.
 - O encerramento possui uma saída de segurança de cinco segundos: se a desconexão do Discord travar, o processo termina com código de erro em vez de permanecer pendurado.
 - Timeout de rede, erros do cliente Discord e desconexões de shard são registrados com contexto. Em `SIGINT` ou `SIGTERM`, o bot interrompe o agendamento e fecha a conexão Discord antes de sair.
-- O SHA do ultimo card confirmado e salvo por branch em `.commit-monitor-state.json`; reinicios no mesmo ambiente retomam a partir deles. O arquivo e ignorado pelo Git e pela Discloud para nao transportar estado antigo em um novo deploy.
+- O SHA do ultimo card confirmado e salvo por branch, junto dos SHAs de commits comuns ja anunciados, em `.commit-monitor-state.json`; reinicios no mesmo ambiente retomam a partir deles. O arquivo e ignorado pelo Git e pela Discloud para nao transportar estado antigo em um novo deploy.
 - Por seguranca contra spam e rate limits, envia no maximo cinco cards por ciclo por padrao. Quando houver mais pendentes, envia primeiro os mais antigos e continua no proximo ciclo, sem descartar os demais. Entre cards, espera 250 ms por padrao; ajuste `DISCORD_SEND_DELAY_MS` entre 0 e 5000 se necessario.
 - Se o SHA salvo nao estiver entre os 20 commits recebidos (por exemplo, apos force-push ou atividade intensa), o bot registra um aviso e trata toda essa janela como possivelmente nova, respeitando o limite por ciclo. Assim, os cards sao enviados gradualmente em vez de descartar commits intermediarios.
 - Titulos de commits escapam Markdown antes de serem usados no embed. O bot responde a mencoes em qualquer canal ao qual tenha acesso.

@@ -108,6 +108,7 @@ const discord = new Client({
 });
 const branchEtags = new Map();
 let lastKnownShas = {};
+let sentCommitShas = new Set();
 let branchSnapshotReady = false;
 let pollingTimer;
 let shuttingDown = false;
@@ -164,6 +165,9 @@ async function restoreState() {
       lastKnownShas = Object.fromEntries(
         Object.entries(state.branches).filter(([, sha]) => typeof sha === 'string' && sha),
       );
+      if (Array.isArray(state.sentCommitShas)) {
+        sentCommitShas = new Set(state.sentCommitShas.filter((sha) => typeof sha === 'string' && sha));
+      }
       branchSnapshotReady = state.branchSnapshotReady === true;
       console.log(`Estado restaurado para ${Object.keys(lastKnownShas).length} branch(es).`);
     } else if (state.branch && state.lastKnownSha) {
@@ -182,6 +186,7 @@ async function persistState() {
     repository: repositoryReference,
     branchSnapshotReady,
     branches: lastKnownShas,
+    sentCommitShas: [...sentCommitShas],
   });
   try {
     await writeFile(temporaryFile, state, 'utf8');
@@ -296,7 +301,7 @@ async function fetchBranches() {
   return { branches };
 }
 
-async function checkBranchForCommits(channel, branch, remaining) {
+async function checkBranchForCommits(channel, branch, remaining, newBranchAnchors) {
   if (remaining === 0) return { sent: 0, hasPending: true };
 
   const commitsUrl = new URL(`https://api.github.com/repos/${owner}/${repository}/commits`);
@@ -327,45 +332,73 @@ async function checkBranchForCommits(channel, branch, remaining) {
 
   const newestSha = commits[0].sha;
   const lastKnownSha = lastKnownShas[branch];
+  let unseen;
   if (!lastKnownSha) {
+    const anchorIndex = newBranchAnchors
+      ? commits.findIndex((commit) => newBranchAnchors.has(commit.sha))
+      : -1;
+    if (anchorIndex === -1) {
+      lastKnownShas[branch] = newestSha;
+      await persistState();
+      console.log(`Monitorando ${owner}/${repository} (${branch}) a partir de ${shortSha(newestSha)}.`);
+      return { sent: 0 };
+    }
+    unseen = commits.slice(0, anchorIndex);
+  } else {
+    if (newestSha === lastKnownSha) return { sent: 0 };
+
+    const previousIndex = commits.findIndex((commit) => commit.sha === lastKnownSha);
+    if (previousIndex === -1) {
+      console.warn(
+        `O ultimo SHA ${shortSha(lastKnownSha)} da branch ${branch} nao esta entre os 20 commits retornados. `
+        + 'O historico pode ter sido reescrito ou ser maior que a janela de consulta.',
+      );
+    }
+    unseen = previousIndex === -1 ? commits : commits.slice(0, previousIndex);
+  }
+
+  if (unseen.length === 0) {
     lastKnownShas[branch] = newestSha;
     await persistState();
-    console.log(`Monitorando ${owner}/${repository} (${branch}) a partir de ${shortSha(newestSha)}.`);
     return { sent: 0 };
   }
-  if (newestSha === lastKnownSha) return { sent: 0 };
 
-  const previousIndex = commits.findIndex((commit) => commit.sha === lastKnownSha);
-  if (previousIndex === -1) {
-    console.warn(
-      `O ultimo SHA ${shortSha(lastKnownSha)} da branch ${branch} nao esta entre os 20 commits retornados. `
-      + 'O historico pode ter sido reescrito ou ser maior que a janela de consulta.',
-    );
-  }
+  let sent = 0;
+  let processed = 0;
+  const chronological = [...unseen].reverse();
+  for (const commit of chronological) {
+    const isMerge = Array.isArray(commit.parents) && commit.parents.length > 1;
+    // Um merge representa uma acao nova na branch de destino e deve ser anunciado,
+    // mesmo que o SHA tenha aparecido anteriormente em outra branch.
+    const shouldSend = isMerge || !sentCommitShas.has(commit.sha);
+    if (shouldSend && sent === remaining) break;
 
-  const unseen = previousIndex === -1 ? commits : commits.slice(0, previousIndex);
-  const hasMoreCommits = unseen.length > remaining;
-  const toSend = (hasMoreCommits ? unseen.slice(-remaining) : unseen).reverse();
-
-  if (hasMoreCommits) {
-    console.warn(`${unseen.length} commits novos detectados na branch ${branch}; enviando os ${toSend.length} mais antigos neste ciclo.`);
-  }
-  for (const commit of toSend) {
-    try {
-      await channel.send({ embeds: [commitEmbed(commit, branch)] });
-    } catch (error) {
-      branchEtags.delete(branch);
-      console.error(`Falha ao enviar o card do commit ${shortSha(commit.sha)} da branch ${branch}:`, error);
-      throw error;
+    if (shouldSend) {
+      try {
+        await channel.send({ embeds: [commitEmbed(commit, branch)] });
+      } catch (error) {
+        branchEtags.delete(branch);
+        console.error(`Falha ao enviar o card do commit ${shortSha(commit.sha)} da branch ${branch}:`, error);
+        throw error;
+      }
+      sentCommitShas.add(commit.sha);
+      sent += 1;
+      if (discordSendDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, discordSendDelayMs));
+      }
     }
+
     lastKnownShas[branch] = commit.sha;
+    processed += 1;
     await persistState();
-    if (discordSendDelayMs > 0 && commit !== toSend.at(-1)) {
-      await new Promise((resolve) => setTimeout(resolve, discordSendDelayMs));
-    }
   }
-  if (hasMoreCommits) branchEtags.delete(branch);
-  return { sent: toSend.length, hasPending: hasMoreCommits };
+
+  const hasPending = processed < chronological.length;
+  if (hasPending) {
+    branchEtags.delete(branch);
+    console.warn(`${chronological.length - processed} commit(s) pendente(s) na branch ${branch}; continuando no proximo ciclo.`);
+  }
+  return { sent, hasPending };
 }
 
 async function checkForCommits(channel) {
@@ -386,19 +419,23 @@ async function checkForCommits(channel) {
   let remaining = maxCommitsPerCheck;
   for (const { name: branch, commit } of branchResult.branches) {
     if (branchSnapshotReady && !Object.hasOwn(lastKnownShas, branch)) {
-      if (remaining === 0) break;
       try {
         await channel.send({ embeds: [branchCreatedEmbed(branch, commit?.sha)] });
       } catch (error) {
         console.error(`Falha ao enviar o card da nova branch ${branch}:`, error);
         throw error;
       }
-      if (commit?.sha) {
-        lastKnownShas[branch] = commit.sha;
-        await persistState();
-      }
-      remaining -= 1;
+      const newBranchAnchors = new Set([
+        ...Object.entries(lastKnownShas)
+          .filter(([knownBranch]) => knownBranch !== branch)
+          .map(([, sha]) => sha),
+        ...sentCommitShas,
+      ]);
+      const result = await checkBranchForCommits(channel, branch, remaining, newBranchAnchors);
+      if (result.errorDelay) return result.errorDelay;
+      remaining -= result.sent;
       if (remaining === 0) break;
+      continue;
     }
     const result = await checkBranchForCommits(channel, branch, remaining);
     if (result.errorDelay) return result.errorDelay;
